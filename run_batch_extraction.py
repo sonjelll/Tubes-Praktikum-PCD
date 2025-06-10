@@ -21,7 +21,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 class DatasetFeatureProcessor:
     def __init__(self, dataset_path, output_path="dataset_features_processed"):
@@ -115,8 +114,8 @@ class DatasetFeatureProcessor:
             output_filename = f"{image_path.stem}_hog.png"
             output_path = category_output_path / output_filename
             
-            # Gunakan method visualize_and_save dengan path output custom
-            hog_output_path = self.extractor.visualize_and_save(str(image_path), output_folder=str(category_output_path))
+            # Gunakan method visualize_and_save dengan path output custom dan tanpa membuat features_extracted.png
+            hog_output_path = self.extractor.visualize_and_save(str(image_path), output_folder=str(category_output_path), create_full_visualization=False)
             
             # Ekstrak fitur untuk machine learning
             extracted_features = self.extract_features_for_ml(features, category_name, str(image_path))

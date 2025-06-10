@@ -33,34 +33,6 @@ class MedicalWasteFeatureExtractor:
         self.features['color_processed'] = denoised
         return denoised
     
-    def remove_background(self, original_image, mask):
-        """
-        Menghilangkan background berdasarkan mask kontur
-        """
-        # Pastikan mask adalah binary (0 atau 255)
-        _, mask_binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        
-        # Buat mask 3 channel jika gambar asli berwarna
-        if len(original_image.shape) == 3:
-            mask_3channel = cv2.merge([mask_binary, mask_binary, mask_binary])
-            # Terapkan mask ke gambar asli
-            foreground = cv2.bitwise_and(original_image, mask_3channel)
-        else:
-            # Untuk grayscale
-            foreground = cv2.bitwise_and(original_image, mask_binary)
-        
-        # Optional: Ganti background dengan warna putih atau transparan
-        if len(original_image.shape) == 3:
-            # Untuk gambar berwarna, buat background putih
-            background_removed = original_image.copy()
-            background_removed[mask_binary == 0] = [255, 255, 255]  # Putih
-        else:
-            # Untuk grayscale, buat background putih
-            background_removed = original_image.copy()
-            background_removed[mask_binary == 0] = 255  # Putih
-            
-        return foreground, background_removed, mask_binary
-    
     def shape_features(self, image):
         """
         Ekstraksi fitur bentuk: Hu moments, aspect ratio, dan analisis kontur
@@ -69,12 +41,12 @@ class MedicalWasteFeatureExtractor:
         _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         # Morfologi untuk membersihkan noise
-        kernel = np.ones((3,3), np.uint8)
+        kernel = np.ones((3,3), np.uint8)  # Kembali ke kernel 3x3 seperti semula
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         
         # Cari kontur
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)  # Kembali ke CHAIN_APPROX_SIMPLE
         
         shape_features = []
         mask = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -205,9 +177,9 @@ class MedicalWasteFeatureExtractor:
                              visualize=False, transform_sqrt=True)
             return hog_features
     
-    def process_image(self, image_path, use_lbp=True, use_glcm=True, remove_bg=True):
+    def process_image(self, image_path, use_lbp=True, use_glcm=False):  # Ubah default use_glcm menjadi False
         """
-        Proses lengkap ekstraksi fitur dari gambar sampah medis dengan background removal
+        Proses lengkap ekstraksi fitur dari gambar sampah medis
         """
         # Baca gambar
         image = cv2.imread(image_path)
@@ -224,33 +196,11 @@ class MedicalWasteFeatureExtractor:
         print("2. Mengekstrak fitur bentuk...")
         shape_features = self.shape_features(processed_image)
         
-        # 3. Background removal jika diminta
-        if remove_bg and 'shape' in self.features and 'mask' in self.features['shape']:
-            print("3. Menghilangkan background...")
-            mask = self.features['shape']['mask']
-            
-            # Remove background dari gambar asli
-            foreground_original, bg_removed_original, _ = self.remove_background(image, mask)
-            
-            # Remove background dari gambar yang sudah diproses
-            foreground_processed, bg_removed_processed, _ = self.remove_background(processed_image, mask)
-            
-            # Simpan hasil background removal
-            self.features['background_removal'] = {
-                'foreground_original': foreground_original,
-                'background_removed_original': bg_removed_original,
-                'foreground_processed': foreground_processed,
-                'background_removed_processed': bg_removed_processed,
-                'mask': mask
-            }
-            
-            # Gunakan gambar tanpa background untuk ekstraksi fitur selanjutnya
-            processed_image_for_features = bg_removed_processed
-        else:
-            processed_image_for_features = processed_image
+        # Gunakan gambar yang sudah diproses untuk ekstraksi fitur selanjutnya
+        processed_image_for_features = processed_image
         
-        # 4. Ekstraksi fitur tekstur
-        print("4. Mengekstrak fitur tekstur...")
+        # 3. Ekstraksi fitur tekstur
+        print("3. Mengekstrak fitur tekstur...")
         texture_features = {}
         
         if use_lbp:
@@ -260,14 +210,15 @@ class MedicalWasteFeatureExtractor:
                 'histogram': lbp_hist
             }
         
-        if use_glcm:
-            glcm_features = self.texture_features_glcm(processed_image_for_features)
-            texture_features['glcm'] = glcm_features
+        # Hapus bagian GLCM
+        # if use_glcm:
+        #     glcm_features = self.texture_features_glcm(processed_image_for_features)
+        #     texture_features['glcm'] = glcm_features
         
         self.features['texture'] = texture_features
         
-        # 5. Ekstraksi fitur HOG
-        print("5. Mengekstrak fitur HOG...")
+        # 4. Ekstraksi fitur HOG
+        print("4. Mengekstrak fitur HOG...")
         hog_features, hog_image = self.hog_features(processed_image_for_features)
         self.features['hog'] = {
             'features': hog_features,
@@ -276,14 +227,21 @@ class MedicalWasteFeatureExtractor:
         
         return self.features
     
-    def visualize_and_save(self, original_image_path, output_folder=".", show_background_removal=True):
+    def visualize_and_save(self, original_image_path, output_folder=".", create_full_visualization=True):
         """
-        Visualisasi dan simpan hasil ekstraksi fitur dengan background removal
+        Visualisasi dan simpan hasil ekstraksi fitur
+        
+        Args:
+            original_image_path (str): Path ke gambar asli
+            output_folder (str): Folder untuk menyimpan hasil visualisasi
+            create_full_visualization (bool): Jika True, buat file features_extracted.png
         """
         # Baca gambar asli
         original = cv2.imread(original_image_path)
+        original_rgb = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
         
-        # Hanya tampilkan HOG saja
+        # Simpan HOG terpisah
+        hog_output_path = None
         if 'hog' in self.features:
             # Buat figure baru dengan ukuran yang lebih besar
             plt.figure(figsize=(12, 10))
@@ -294,90 +252,63 @@ class MedicalWasteFeatureExtractor:
             
             # Simpan hasil visualisasi HOG
             base_name = os.path.splitext(os.path.basename(original_image_path))[0]
-            output_path = os.path.join(output_folder, f"{base_name}_hog.png")
+            hog_output_path = os.path.join(output_folder, f"{base_name}_hog.png")
+            plt.savefig(hog_output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"Visualisasi HOG disimpan di: {hog_output_path}")
+        else:
+            print("Fitur HOG tidak ditemukan dalam hasil ekstraksi.")
+        
+        # Hanya buat visualisasi lengkap jika diminta
+        if create_full_visualization:
+            # Buat subplot dengan ukuran yang sesuai - ubah menjadi 2x3 untuk menampilkan semua fitur
+            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                
+            fig.suptitle('Ekstraksi Fitur Sampah Medis', fontsize=16)
+            
+            # Gambar asli
+            axes[0, 0].imshow(original_rgb)
+            axes[0, 0].set_title('Gambar Asli')
+            axes[0, 0].axis('off')
+            
+            # Hasil preprocessing warna
+            axes[0, 1].imshow(self.features['color_processed'], cmap='gray')
+            axes[0, 1].set_title('Preprocessing Warna')
+            axes[0, 1].axis('off')
+            
+            # Fitur bentuk (mask)
+            if 'shape' in self.features and 'mask' in self.features['shape']:
+                axes[0, 2].imshow(self.features['shape']['mask'], cmap='gray')
+                axes[0, 2].set_title('Fitur Bentuk (Mask)')
+                axes[0, 2].axis('off')
+            
+            # Fitur tekstur LBP
+            if 'texture' in self.features and 'lbp' in self.features['texture']:
+                axes[1, 0].imshow(self.features['texture']['lbp']['image'], cmap='gray')
+                axes[1, 0].set_title('Fitur LBP')
+                axes[1, 0].axis('off')
+            
+            # HOG
+            if 'hog' in self.features:
+                axes[1, 1].imshow(self.features['hog']['image'], cmap='gray')
+                axes[1, 1].set_title('HOG Features')
+                axes[1, 1].axis('off')
+            
+            # Kosongkan subplot yang tidak digunakan
+            axes[1, 2].axis('off')
+            
+            plt.tight_layout()
+            
+            # Simpan hasil visualisasi
+            base_name = os.path.splitext(os.path.basename(original_image_path))[0]
+            output_path = os.path.join(output_folder, f"{base_name}_features_extracted.png")
             plt.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close()
             
-            print(f"Visualisasi HOG disimpan di: {output_path}")
-            return output_path
-        else:
-            print("Fitur HOG tidak ditemukan dalam hasil ekstraksi.")
-            return None
-        original_rgb = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-        
-        # Tentukan ukuran subplot berdasarkan apakah background removal ditampilkan
-        if show_background_removal and 'background_removal' in self.features:
-            fig, axes = plt.subplots(3, 3, figsize=(18, 15))
-        else:
-            fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+            print(f"Hasil visualisasi disimpan di: {output_path}")
             
-        fig.suptitle('Ekstraksi Fitur Sampah Medis dengan Background Removal', fontsize=16)
-        
-        # Gambar asli
-        axes[0, 0].imshow(original_rgb)
-        axes[0, 0].set_title('Gambar Asli')
-        axes[0, 0].axis('off')
-        
-        # Hasil preprocessing warna
-        axes[0, 1].imshow(self.features['color_processed'], cmap='gray')
-        axes[0, 1].set_title('Preprocessing Warna')
-        axes[0, 1].axis('off')
-        
-        # HOG
-        if 'hog' in self.features:
-            axes[1, 2].imshow(self.features['hog']['image'], cmap='gray')
-            axes[1, 2].set_title('HOG Features')
-            axes[1, 2].axis('off')
-        
-        # Baris ketiga untuk background removal (jika ada)
-        if show_background_removal and 'background_removal' in self.features:
-            bg_removal = self.features['background_removal']
-            
-            # Mask
-            axes[2, 0].imshow(bg_removal['mask'], cmap='gray')
-            axes[2, 0].set_title('Mask Kontur')
-            axes[2, 0].axis('off')
-            
-            # Background removed (gambar asli)
-            if len(bg_removal['background_removed_original'].shape) == 3:
-                bg_removed_rgb = cv2.cvtColor(bg_removal['background_removed_original'], cv2.COLOR_BGR2RGB)
-                axes[2, 1].imshow(bg_removed_rgb)
-            else:
-                axes[2, 1].imshow(bg_removal['background_removed_original'], cmap='gray')
-            axes[2, 1].set_title('Background Dihilangkan')
-            axes[2, 1].axis('off')
-            
-            # Foreground only
-            if len(bg_removal['foreground_original'].shape) == 3:
-                foreground_rgb = cv2.cvtColor(bg_removal['foreground_original'], cv2.COLOR_BGR2RGB)
-                axes[2, 2].imshow(foreground_rgb)
-            else:
-                axes[2, 2].imshow(bg_removal['foreground_original'], cmap='gray')
-            axes[2, 2].set_title('Objek Saja (Foreground)')
-            axes[2, 2].axis('off')
-        
-        plt.tight_layout()
-        
-        # Simpan hasil visualisasi
-        base_name = os.path.splitext(os.path.basename(original_image_path))[0]
-        output_path = os.path.join(output_folder, f"{base_name}_features_extracted.png")
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"Hasil visualisasi disimpan di: {output_path}")
-        
-        # Simpan gambar tanpa background secara terpisah
-        if 'background_removal' in self.features:
-            bg_removed_path = os.path.join(output_folder, f"{base_name}_background_removed.png")
-            cv2.imwrite(bg_removed_path, self.features['background_removal']['background_removed_original'])
-            print(f"Gambar tanpa background disimpan di: {bg_removed_path}")
-            
-            # Simpan mask
-            mask_path = os.path.join(output_folder, f"{base_name}_mask.png")
-            cv2.imwrite(mask_path, self.features['background_removal']['mask'])
-            print(f"Mask kontur disimpan di: {mask_path}")
-        
-        return output_path
+        return hog_output_path if hog_output_path else None
     
     def print_feature_summary(self):
         """
@@ -396,18 +327,12 @@ class MedicalWasteFeatureExtractor:
             print(f"  - Solidity: {shape['solidity']:.4f}")
             print(f"  - Hu Moments: {shape['hu_moments'][:3]}...")  # Tampilkan 3 pertama
         
-        # Background removal info
-        if 'background_removal' in self.features:
-            print("\nBackground Removal:")
-            print("  - Background berhasil dihilangkan")
-            print("  - Mask kontur telah dibuat")
-        
-        # Fitur tekstur GLCM
-        if 'texture' in self.features and 'glcm' in self.features['texture']:
-            print("\nFitur Tekstur (GLCM):")
-            glcm = self.features['texture']['glcm']
-            for key, value in glcm.items():
-                print(f"  - {key.capitalize()}: {value:.4f}")
+        # Hapus bagian GLCM
+        # if 'texture' in self.features and 'glcm' in self.features['texture']:
+        #     print("\nFitur Tekstur (GLCM):")
+        #     glcm = self.features['texture']['glcm']
+        #     for key, value in glcm.items():
+        #         print(f"  - {key.capitalize()}: {value:.4f}")
         
         # Fitur HOG
         if 'hog' in self.features:
@@ -419,7 +344,7 @@ class MedicalWasteFeatureExtractor:
 
 def main():
     """
-    Fungsi utama untuk menjalankan ekstraksi fitur dengan background removal
+    Fungsi utama untuk menjalankan ekstraksi fitur
     """
     # Inisialisasi extractor
     extractor = MedicalWasteFeatureExtractor()
@@ -432,16 +357,12 @@ def main():
         print(f"Error: File {image_path} tidak ditemukan!")
         return
     
-    # Tanya apakah ingin menghilangkan background
-    remove_bg_input = input("Hilangkan background? (y/n, default: y): ").strip().lower()
-    remove_bg = remove_bg_input != 'n'
-    
     try:
         # Proses gambar
-        features = extractor.process_image(image_path, use_lbp=True, use_glcm=True, remove_bg=remove_bg)
+        features = extractor.process_image(image_path, use_lbp=True, use_glcm=True)
         
         # Visualisasi dan simpan hasil
-        output_path = extractor.visualize_and_save(image_path, show_background_removal=remove_bg)
+        output_path = extractor.visualize_and_save(image_path)
         
         # Cetak ringkasan fitur
         extractor.print_feature_summary()

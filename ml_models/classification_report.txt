@@ -1,0 +1,32 @@
+=== CLASSIFICATION REPORT - KNN ===
+              precision    recall  f1-score   support
+
+       ampul       1.00      0.75      0.86         8
+      gloves       1.00      0.88      0.93         8
+     IV-tube       1.00      1.00      1.00         8
+       kapas       1.00      1.00      1.00         8
+      masker       1.00      1.00      1.00         8
+      perban       1.00      0.50      0.67         8
+    skalpels       0.53      1.00      0.70         8
+      suntik       1.00      1.00      1.00         8
+
+    accuracy                           0.89        64
+   macro avg       0.94      0.89      0.89        64
+weighted avg       0.94      0.89      0.89        64
+
+
+=== CLASSIFICATION REPORT - RANDOM FOREST ===
+              precision    recall  f1-score   support
+
+       ampul       0.78      0.88      0.82         8
+      gloves       1.00      0.75      0.86         8
+     IV-tube       1.00      0.88      0.93         8
+       kapas       1.00      1.00      1.00         8
+      masker       1.00      1.00      1.00         8
+      perban       1.00      0.75      0.86         8
+    skalpels       1.00      1.00      1.00         8
+      suntik       0.67      1.00      0.80         8
+
+    accuracy                           0.91        64
+   macro avg       0.93      0.91      0.91        64
+weighted avg       0.93      0.91      0.91        64

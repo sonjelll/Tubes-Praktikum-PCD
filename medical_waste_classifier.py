@@ -3,8 +3,8 @@ import sys
 import cv2
 import numpy as np
 import pandas as pd
-from pathlib import Path
 import matplotlib.pyplot as plt
+from pathlib import Path
 from tkinter import filedialog, Tk
 from joblib import load
 
@@ -12,14 +12,14 @@ from joblib import load
 from medical_waste_feature_extractor import MedicalWasteFeatureExtractor
 
 class MedicalWasteImageClassifier:
-    def __init__(self, model_folder="ml_models_hog_only"):
+    def __init__(self, model_path="ml_models"):
         """
         Inisialisasi classifier untuk gambar sampah medis
         
         Args:
-            model_folder (str): Path ke folder model yang telah dilatih
+            model_path (str): Path ke folder model yang telah dilatih
         """
-        self.model_folder = Path(model_folder)
+        self.model_path = Path(model_path)
         self.extractor = MedicalWasteFeatureExtractor()
         self.models = {}
         self.scaler = None
@@ -34,7 +34,7 @@ class MedicalWasteImageClassifier:
         """
         try:
             # Load scaler
-            scaler_path = self.model_folder / 'scaler.joblib'
+            scaler_path = self.model_path / 'scaler.joblib'
             if scaler_path.exists():
                 self.scaler = load(scaler_path)
                 print(f"✅ Scaler dimuat dari: {scaler_path}")
@@ -43,7 +43,7 @@ class MedicalWasteImageClassifier:
                 return False
             
             # Load model KNN
-            knn_path = self.model_folder / 'knn_model.joblib'
+            knn_path = self.model_path / 'knn_model.joblib'
             if knn_path.exists():
                 self.models['knn'] = load(knn_path)
                 print(f"✅ Model KNN dimuat dari: {knn_path}")
@@ -51,7 +51,7 @@ class MedicalWasteImageClassifier:
                 print(f"⚠️ Model KNN tidak ditemukan di: {knn_path}")
             
             # Load model RandomForest
-            rf_path = self.model_folder / 'randomforest_model.joblib'
+            rf_path = self.model_path / 'randomforest_model.joblib'
             if rf_path.exists():
                 self.models['randomforest'] = load(rf_path)
                 print(f"✅ Model RandomForest dimuat dari: {rf_path}")
@@ -76,18 +76,28 @@ class MedicalWasteImageClassifier:
             traceback.print_exc()
             return False
     
-    def extract_hog_features(self, image_path):
+    def classify_image(self, image_path, model_type='randomforest', show_hog=True):
         """
-        Ekstrak fitur HOG dari gambar
+        Klasifikasi gambar menggunakan model yang dipilih
         
         Args:
             image_path (str): Path ke gambar yang akan diklasifikasi
+            model_type (str): Tipe model ('knn' atau 'randomforest')
+            show_hog (bool): Tampilkan visualisasi HOG
             
         Returns:
-            dict: Fitur HOG yang diekstrak
+            dict: Hasil klasifikasi
         """
         try:
-            # Proses gambar untuk mendapatkan fitur HOG
+            # Validasi model_type
+            if model_type not in self.models:
+                print(f"❌ Model {model_type} tidak tersedia. Pilihan: {list(self.models.keys())}")
+                return None
+            
+            # Ekstrak fitur HOG
+            print(f"🔄 Mengekstrak fitur HOG dari: {image_path}")
+            
+            # Proses gambar untuk mendapatkan fitur HOG dengan visualisasi
             features = self.extractor.process_image(image_path, use_lbp=False, use_glcm=False)
             
             # Ekstrak nilai per-pixel dari citra HOG
@@ -102,55 +112,33 @@ class MedicalWasteImageClassifier:
                 for i, idx in enumerate(pixel_indices):
                     hog_features[f'hog_pixel_{i+1}'] = hog_pixels[idx]
             
-            # Visualisasi HOG (opsional)
-            if 'hog' in features and 'image' in features['hog']:
-                plt.figure(figsize=(10, 5))
-                plt.subplot(1, 2, 1)
-                plt.imshow(cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB))
-                plt.title("Gambar Asli")
-                plt.axis('off')
-                
-                plt.subplot(1, 2, 2)
-                plt.imshow(features['hog']['image'], cmap='gray')
-                plt.title("HOG Image")
-                plt.axis('off')
-                
-                plt.tight_layout()
-                plt.savefig(f"{Path(image_path).stem}_hog_preview.png")
-                plt.close()
-            
-            return hog_features
-            
-        except Exception as e:
-            print(f"❌ Error saat ekstraksi fitur HOG: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
-    def classify_image(self, image_path, model_type='randomforest'):
-        """
-        Klasifikasi gambar menggunakan model yang dipilih
-        
-        Args:
-            image_path (str): Path ke gambar yang akan diklasifikasi
-            model_type (str): Tipe model ('knn' atau 'randomforest')
-            
-        Returns:
-            dict: Hasil klasifikasi
-        """
-        try:
-            # Validasi model_type
-            if model_type not in self.models:
-                print(f"❌ Model {model_type} tidak tersedia. Pilihan: {list(self.models.keys())}")
-                return None
-            
-            # Ekstrak fitur HOG
-            print(f"🔄 Mengekstrak fitur HOG dari: {image_path}")
-            hog_features = self.extract_hog_features(image_path)
-            
             if not hog_features:
                 print("❌ Gagal mengekstrak fitur HOG!")
                 return None
+            
+            # Tampilkan visualisasi HOG jika diminta
+            if show_hog and 'hog' in features:
+                # Baca gambar asli untuk ditampilkan
+                original_img = cv2.imread(image_path)
+                original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
+                
+                # Siapkan visualisasi
+                plt.figure(figsize=(12, 6))
+                
+                # Gambar asli
+                plt.subplot(1, 2, 1)
+                plt.imshow(original_img)
+                plt.title("Gambar Asli")
+                plt.axis('off')
+                
+                # Visualisasi HOG
+                plt.subplot(1, 2, 2)
+                plt.imshow(features['hog']['image'], cmap='gray')
+                plt.title("Visualisasi HOG")
+                plt.axis('off')
+                
+                plt.tight_layout()
+                plt.show()
             
             # Konversi fitur ke format yang sesuai untuk model
             features_df = pd.DataFrame([hog_features])
@@ -162,6 +150,14 @@ class MedicalWasteImageClassifier:
             model = self.models[model_type]
             prediction = model.predict(features_scaled)[0]
             probabilities = model.predict_proba(features_scaled)[0]
+            
+            # Cek apakah probabilitas tertinggi kurang dari 50%
+            max_probability = max(probabilities)
+            if max_probability < 0.5:
+                # Jika semua probabilitas kurang dari 50%, ubah prediksi menjadi bukan sampah medis
+                original_prediction = prediction
+                prediction = 'bukan sampah medis'
+                print(f"ℹ️ Probabilitas tertinggi ({max_probability*100:.2f}%) kurang dari 50%, diklasifikasikan sebagai bukan sampah medis")
             
             # Buat hasil
             result = {
@@ -205,22 +201,6 @@ def select_image():
     
     return file_path if file_path else None
 
-def select_model_folder():
-    """
-    Buka dialog untuk memilih folder model
-    
-    Returns:
-        str: Path ke folder model yang dipilih
-    """
-    root = Tk()
-    root.withdraw()  # Sembunyikan window utama
-    
-    folder_path = filedialog.askdirectory(
-        title="Pilih Folder Model"
-    )
-    
-    return folder_path if folder_path else "ml_models_hog_only"
-
 def main():
     """
     Fungsi utama program
@@ -228,12 +208,11 @@ def main():
     print("\n🔍 KLASIFIKASI SAMPAH MEDIS DENGAN HOG, KNN, DAN RANDOMFOREST")
     print("=" * 60)
     
-    # Pilih folder model (opsional)
-    print("\n📁 Pilih folder model (biarkan kosong untuk default: ml_models_hog_only)")
-    model_folder = select_model_folder()
+    # Gunakan path model default
+    model_path = "ml_models"
     
     # Inisialisasi classifier
-    classifier = MedicalWasteImageClassifier(model_folder)
+    classifier = MedicalWasteImageClassifier(model_path)
     
     # Pilih gambar untuk klasifikasi
     print("\n🖼️ Pilih gambar sampah medis untuk diklasifikasi")
@@ -265,8 +244,8 @@ def main():
     model_type = available_models[choice - 1]
     print(f"🤖 Menggunakan model: {model_type}")
     
-    # Klasifikasi gambar
-    result = classifier.classify_image(image_path, model_type)
+    # Klasifikasi gambar dengan menampilkan visualisasi HOG
+    result = classifier.classify_image(image_path, model_type, show_hog=True)
     
     if result:
         print("\n✅ Klasifikasi berhasil!")

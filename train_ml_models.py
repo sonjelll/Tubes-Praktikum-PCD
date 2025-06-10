@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Script untuk melatih model machine learning (KNN dan RandomForest) menggunakan
-nilai per-pixel HOG yang telah diekstrak dari dataset sampah medis.
+kombinasi fitur bentuk, tekstur, dan HOG dari dataset sampah medis.
 
-Menggunakan file CSV hasil ekstraksi nilai per-pixel HOG untuk melatih model klasifikasi.
+Menggunakan file CSV hasil ekstraksi fitur untuk melatih model klasifikasi.
 """
 
 import os
@@ -24,21 +24,26 @@ from sklearn.preprocessing import StandardScaler
 from joblib import dump, load
 
 class MedicalWasteClassifier:
-    def __init__(self, hog_pixels_path, output_path=None):
+    def __init__(self, features_path, output_path=None, use_all_features=True):
         """
-        Inisialisasi classifier untuk dataset sampah medis menggunakan hanya HOG pixels
+        Inisialisasi classifier untuk dataset sampah medis menggunakan kombinasi fitur
         
         Args:
-            hog_pixels_path (str): Path ke file CSV nilai per-pixel HOG
+            features_path (str): Path ke file CSV fitur (dataset_features_for_ml.csv atau hog_pixels_for_ml.csv)
             output_path (str, optional): Path untuk menyimpan hasil model
+            use_all_features (bool): Jika True, gunakan semua fitur (bentuk, tekstur, HOG), jika False hanya HOG pixels
         """
-        self.hog_pixels_path = Path(hog_pixels_path)
+        self.features_path = Path(features_path)
+        self.use_all_features = use_all_features
         
         if output_path:
             self.output_path = Path(output_path)
         else:
-            # Default output path adalah folder yang sama dengan file HOG pixels
-            self.output_path = self.hog_pixels_path.parent / 'ml_models_hog_only'
+            # Default output path berdasarkan jenis fitur yang digunakan
+            if use_all_features:
+                self.output_path = self.features_path.parent / 'ml_models_combined_features'
+            else:
+                self.output_path = self.features_path.parent / 'ml_models_hog_only'
         
         # Buat folder output jika belum ada
         self.output_path.mkdir(parents=True, exist_ok=True)
@@ -55,22 +60,32 @@ class MedicalWasteClassifier:
     
     def load_data(self):
         """
-        Muat data dari file CSV HOG pixels
+        Muat data dari file CSV fitur
         
         Returns:
             bool: True jika berhasil, False jika gagal
         """
         try:
-            print(f"📊 Membaca data HOG pixels dari: {self.hog_pixels_path}")
-            if not self.hog_pixels_path.exists():
-                print(f"❌ File CSV HOG pixels tidak ditemukan: {self.hog_pixels_path}")
+            print(f"📊 Membaca data fitur dari: {self.features_path}")
+            if not self.features_path.exists():
+                print(f"❌ File CSV fitur tidak ditemukan: {self.features_path}")
                 return False
             
-            # Baca data dari CSV HOG pixels
-            df = pd.read_csv(self.hog_pixels_path)
+            # Baca data dari CSV fitur
+            df = pd.read_csv(self.features_path)
             
             # Pisahkan fitur dan target
-            X = df.drop(['image_path', 'category'], axis=1)
+            if self.use_all_features:
+                # Gunakan semua fitur kecuali image_path dan category
+                print("🔍 Menggunakan kombinasi fitur bentuk, tekstur, dan HOG...")
+                X = df.drop(['image_path', 'category'], axis=1)
+            else:
+                # Gunakan hanya fitur HOG pixel
+                print("🔍 Menggunakan hanya fitur HOG pixel...")
+                # Filter kolom yang dimulai dengan 'hog_pixel_'
+                hog_pixel_columns = [col for col in df.columns if col.startswith('hog_pixel_')]
+                X = df[hog_pixel_columns]
+            
             y = df['category']
             
             # Cek missing values dan handle jika ada
@@ -85,7 +100,7 @@ class MedicalWasteClassifier:
             self.classes = y.unique()
             
             # Normalisasi fitur
-            print("🔄 Melakukan normalisasi fitur HOG pixels...")
+            print("🔄 Melakukan normalisasi fitur...")
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X)
             
@@ -95,10 +110,10 @@ class MedicalWasteClassifier:
                 X_scaled, y, test_size=0.2, random_state=42, stratify=y
             )
             
-            print(f"✅ Data HOG pixels berhasil dimuat: {len(X)} sampel, {len(self.classes)} kelas")
+            print(f"✅ Data fitur berhasil dimuat: {len(X)} sampel, {len(self.classes)} kelas")
             print(f"   └─ Training: {len(self.X_train)} sampel")
             print(f"   └─ Testing: {len(self.X_test)} sampel")
-            print(f"   └─ Jumlah fitur HOG pixels: {X.shape[1]}")
+            print(f"   └─ Jumlah fitur: {X.shape[1]}")
             
             return True
             
@@ -108,7 +123,6 @@ class MedicalWasteClassifier:
             traceback.print_exc()
             return False
 
-    # Metode lainnya tetap sama
     def train_knn(self, n_neighbors=5, use_grid_search=True):
         """
         Latih model KNN dengan GridSearch opsional
@@ -125,9 +139,10 @@ class MedicalWasteClassifier:
         if use_grid_search:
             print("   └─ Menggunakan GridSearchCV untuk tuning parameter...")
             param_grid = {
-                'n_neighbors': [3, 5, 7, 9, 11],
+                'n_neighbors': [3, 5, 7, 9, 11, 13, 15],
                 'weights': ['uniform', 'distance'],
-                'metric': ['euclidean', 'manhattan', 'minkowski']
+                'metric': ['euclidean', 'manhattan', 'minkowski'],
+                'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute']
             }
             
             grid_search = GridSearchCV(
@@ -166,10 +181,11 @@ class MedicalWasteClassifier:
         if use_grid_search:
             print("   └─ Menggunakan GridSearchCV untuk tuning parameter...")
             param_grid = {
-                'n_estimators': [50, 100, 200],
-                'max_depth': [None, 10, 20, 30],
+                'n_estimators': [50, 100, 200, 300],
+                'max_depth': [None, 10, 20, 30, 40],
                 'min_samples_split': [2, 5, 10],
-                'min_samples_leaf': [1, 2, 4]
+                'min_samples_leaf': [1, 2, 4],
+                'max_features': ['sqrt', 'log2', None]
             }
             
             grid_search = GridSearchCV(
@@ -193,14 +209,9 @@ class MedicalWasteClassifier:
         
         return accuracy
     
+    # Metode lainnya tetap sama
     def save_confusion_matrix(self, model, model_name):
-        """
-        Simpan confusion matrix untuk model
-        
-        Args:
-            model: Model yang akan dievaluasi
-            model_name (str): Nama model untuk penamaan file
-        """
+        """Simpan confusion matrix untuk model"""
         y_pred = model.predict(self.X_test)
         cm = confusion_matrix(self.y_test, y_pred)
         
@@ -219,9 +230,7 @@ class MedicalWasteClassifier:
         print(f"📊 Confusion Matrix {model_name} disimpan ke: {cm_path}")
     
     def save_classification_report(self):
-        """
-        Simpan classification report untuk kedua model
-        """
+        """Simpan classification report untuk kedua model"""
         report_path = self.output_path / 'classification_report.txt'
         
         with open(report_path, 'w') as f:
@@ -241,9 +250,7 @@ class MedicalWasteClassifier:
         print(f"📝 Classification Report disimpan ke: {report_path}")
     
     def save_feature_importance(self):
-        """
-        Simpan dan visualisasikan feature importance dari RandomForest
-        """
+        """Simpan dan visualisasikan feature importance dari RandomForest"""
         if not self.rf or not hasattr(self.rf, 'feature_importances_'):
             print("⚠️ Model RandomForest tidak tersedia atau tidak memiliki feature_importances_")
             return
@@ -273,9 +280,7 @@ class MedicalWasteClassifier:
         print(f"📊 Visualisasi Feature Importance disimpan ke: {img_path}")
     
     def save_models(self):
-        """
-        Simpan model yang telah dilatih
-        """
+        """Simpan model yang telah dilatih"""
         # Simpan KNN model
         if self.knn:
             knn_path = self.output_path / 'knn_model.joblib'
@@ -295,15 +300,7 @@ class MedicalWasteClassifier:
             print(f"✅ Scaler disimpan ke: {scaler_path}")
     
     def run_training(self, use_grid_search=False):
-        """
-        Jalankan seluruh proses pelatihan dan evaluasi
-        
-        Args:
-            use_grid_search (bool): Apakah menggunakan GridSearch untuk tuning parameter
-            
-        Returns:
-            bool: True jika berhasil, False jika gagal
-        """
+        """Jalankan seluruh proses pelatihan dan evaluasi"""
         print("\n🤖 Memulai proses machine learning...")
         print("=" * 60)
         
@@ -341,24 +338,33 @@ class MedicalWasteClassifier:
 def main():
     """Fungsi utama"""
     if len(sys.argv) < 2:
-        print("Penggunaan: python train_ml_models.py <path_hog_pixels_csv> [output_path]")
-        print("Contoh: python train_ml_models.py ./dataset_output/hog_pixels_for_ml.csv ./ml_models_hog_only")
+        print("Penggunaan: python train_ml_models.py <path_features_csv> [output_path] [use_all_features]")
+        print("Contoh: python train_ml_models.py ./dataset_output/dataset_features_for_ml.csv ./ml_models_combined_features true")
+        print("Atau: python train_ml_models.py ./dataset_output/hog_pixels_for_ml.csv ./ml_models_hog_only false")
         sys.exit(1)
     
-    hog_pixels_path = sys.argv[1]
+    features_path = sys.argv[1]
     output_path = sys.argv[2] if len(sys.argv) > 2 else None
     
-    # Inisialisasi classifier hanya dengan HOG pixels
-    classifier = MedicalWasteClassifier(hog_pixels_path, output_path)
+    # Tentukan apakah menggunakan semua fitur atau hanya HOG pixels
+    if len(sys.argv) > 3:
+        use_all_features = sys.argv[3].lower() == 'true'
+    else:
+        # Default berdasarkan nama file input
+        use_all_features = 'dataset_features_for_ml' in features_path
+    
+    # Inisialisasi classifier
+    classifier = MedicalWasteClassifier(features_path, output_path, use_all_features)
     
     # Tanya apakah ingin menggunakan GridSearch
-    use_grid_search = input("Gunakan GridSearch untuk tuning parameter? (y/n, default: n): ").strip().lower() == 'y'
+    use_grid_search = input("Gunakan GridSearch untuk tuning parameter? (y/n, default: y): ").strip().lower() != 'n'
     
     # Jalankan pelatihan
     success = classifier.run_training(use_grid_search=use_grid_search)
     
     if success:
-        print("\n🎉 Pelatihan model machine learning dengan HOG pixels berhasil!")
+        feature_type = "kombinasi fitur (bentuk, tekstur, HOG)" if use_all_features else "HOG pixels"
+        print(f"\n🎉 Pelatihan model machine learning dengan {feature_type} berhasil!")
         sys.exit(0)
     else:
         print("\n💥 Pelatihan model machine learning gagal!")
