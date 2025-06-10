@@ -23,7 +23,7 @@ def run_extraction(image_path):
         extractor = MedicalWasteFeatureExtractor()
         
         # Proses gambar
-        features = extractor.process_image(image_path, use_lbp=True, use_glcm=True)
+        features = extractor.process_image(image_path)
         
         # Visualisasi dan simpan hasil
         output_path = extractor.visualize_and_save(image_path)

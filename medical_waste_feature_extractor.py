@@ -1,9 +1,10 @@
 import cv2
 import numpy as np
 from skimage import feature, filters, measure
-from skimage.feature import hog, local_binary_pattern, graycomatrix, graycoprops
-import matplotlib.pyplot as plt
+from skimage.feature import hog, local_binary_pattern
 from scipy import ndimage
+import matplotlib.pyplot as plt
+import warnings
 import os
 
 class MedicalWasteFeatureExtractor:
@@ -98,50 +99,42 @@ class MedicalWasteFeatureExtractor:
         self.features['shape'] = shape_features
         return shape_features
     
-    def texture_features_lbp(self, image, radius=3, n_points=24):
+    def texture_features_lbp(self, image, radius=3, n_points=24, method='uniform'):
         """
         Ekstraksi fitur tekstur menggunakan Local Binary Pattern (LBP)
+        
+        Args:
+            image (numpy.ndarray): Citra grayscale
+            radius (int): Radius untuk LBP
+            n_points (int): Jumlah titik di sekitar pusat
+            method (str): Metode LBP ('uniform', 'default', 'ror', 'var')
+            
+        Returns:
+            dict: Dictionary berisi fitur LBP dan visualisasi
         """
+        # Pastikan gambar dalam format grayscale
+        if len(image.shape) > 2:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
         # Hitung LBP
-        lbp = local_binary_pattern(image, n_points, radius, method='uniform')
+        lbp = local_binary_pattern(image, n_points, radius, method)
         
         # Hitung histogram LBP
-        n_bins = n_points + 2
-        hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins))
+        n_bins = int(lbp.max() + 1)
+        hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins), density=True)
         
-        # Normalisasi histogram
-        hist = hist.astype(float)
-        hist /= (hist.sum() + 1e-7)
+        # Buat visualisasi LBP
+        # Normalisasi LBP untuk visualisasi
+        lbp_image = (lbp * (255.0 / (n_bins - 1))).astype(np.uint8)
         
-        return lbp, hist
-    
-    def texture_features_glcm(self, image, distances=[1], angles=[0, 45, 90, 135]):
-        """
-        Ekstraksi fitur tekstur menggunakan Gray Level Co-occurrence Matrix (GLCM)
-        """
-        # Konversi sudut ke radian
-        angles_rad = [np.radians(angle) for angle in angles]
+        # Buat colormap untuk visualisasi yang lebih baik
+        lbp_colored = cv2.applyColorMap(lbp_image, cv2.COLORMAP_JET)
         
-        # Hitung GLCM
-        glcm = graycomatrix(image, distances=distances, angles=angles_rad, 
-                           levels=256, symmetric=True, normed=True)
-        
-        # Ekstrak properti GLCM
-        contrast = graycoprops(glcm, 'contrast').mean()
-        dissimilarity = graycoprops(glcm, 'dissimilarity').mean()
-        homogeneity = graycoprops(glcm, 'homogeneity').mean()
-        energy = graycoprops(glcm, 'energy').mean()
-        correlation = graycoprops(glcm, 'correlation').mean()
-        
-        glcm_features = {
-            'contrast': contrast,
-            'dissimilarity': dissimilarity,
-            'homogeneity': homogeneity,
-            'energy': energy,
-            'correlation': correlation
+        return {
+            'lbp': lbp,
+            'histogram': hist,
+            'image': lbp_colored
         }
-        
-        return glcm_features
     
     def hog_features(self, image, orientations=9, pixels_per_cell=(8, 8), 
                      cells_per_block=(2, 2), visualize=True):
@@ -177,53 +170,55 @@ class MedicalWasteFeatureExtractor:
                              visualize=False, transform_sqrt=True)
             return hog_features
     
-    def process_image(self, image_path, use_lbp=True, use_glcm=False):  # Ubah default use_glcm menjadi False
+    def process_image(self, image_path, use_lbp=True, use_hog=True):
         """
-        Proses lengkap ekstraksi fitur dari gambar sampah medis
+        Proses gambar dan ekstrak semua fitur
+        
+        Args:
+            image_path (str): Path ke gambar yang akan diproses
+            use_lbp (bool): Jika True, ekstrak fitur tekstur LBP
+            use_hog (bool): Jika True, ekstrak fitur HOG
+            
+        Returns:
+            dict: Dictionary berisi semua fitur yang diekstrak
         """
+        # Reset fitur
+        self.features = {}
+        
         # Baca gambar
         image = cv2.imread(image_path)
         if image is None:
-            raise ValueError(f"Tidak dapat membaca gambar: {image_path}")
-        
-        print(f"Memproses gambar: {image_path}")
+            raise ValueError(f"Gambar tidak ditemukan: {image_path}")
         
         # 1. Preprocessing warna
         print("1. Melakukan preprocessing warna...")
         processed_image = self.color_preprocessing(image)
+        self.features['color_processed'] = processed_image
+        
+        # Gunakan hasil preprocessing untuk ekstraksi fitur selanjutnya
+        processed_image_for_features = processed_image.copy()
         
         # 2. Ekstraksi fitur bentuk
         print("2. Mengekstrak fitur bentuk...")
-        shape_features = self.shape_features(processed_image)
+        shape_features = self.shape_features(processed_image_for_features)
+        self.features['shape'] = shape_features
         
-        # Gunakan gambar yang sudah diproses untuk ekstraksi fitur selanjutnya
-        processed_image_for_features = processed_image
-        
-        # 3. Ekstraksi fitur tekstur
-        print("3. Mengekstrak fitur tekstur...")
-        texture_features = {}
-        
+        # 3. Ekstraksi fitur tekstur LBP
         if use_lbp:
-            lbp_image, lbp_hist = self.texture_features_lbp(processed_image_for_features)
-            texture_features['lbp'] = {
-                'image': lbp_image,
-                'histogram': lbp_hist
-            }
-        
-        # Hapus bagian GLCM
-        # if use_glcm:
-        #     glcm_features = self.texture_features_glcm(processed_image_for_features)
-        #     texture_features['glcm'] = glcm_features
-        
-        self.features['texture'] = texture_features
+            print("3. Mengekstrak fitur tekstur LBP...")
+            texture_features = {}
+            lbp_features = self.texture_features_lbp(processed_image_for_features)
+            texture_features['lbp'] = lbp_features
+            self.features['texture'] = texture_features
         
         # 4. Ekstraksi fitur HOG
-        print("4. Mengekstrak fitur HOG...")
-        hog_features, hog_image = self.hog_features(processed_image_for_features)
-        self.features['hog'] = {
-            'features': hog_features,
-            'image': hog_image
-        }
+        if use_hog:
+            print("4. Mengekstrak fitur HOG...")
+            hog_features, hog_image = self.hog_features(processed_image_for_features)
+            self.features['hog'] = {
+                'features': hog_features,
+                'image': hog_image
+            }
         
         return self.features
     
@@ -284,8 +279,8 @@ class MedicalWasteFeatureExtractor:
                 axes[0, 2].axis('off')
             
             # Fitur tekstur LBP
-            if 'texture' in self.features and 'lbp' in self.features['texture']:
-                axes[1, 0].imshow(self.features['texture']['lbp']['image'], cmap='gray')
+            if 'texture' in self.features and 'lbp' in self.features['texture'] and 'image' in self.features['texture']['lbp']:
+                axes[1, 0].imshow(self.features['texture']['lbp']['image'])
                 axes[1, 0].set_title('Fitur LBP')
                 axes[1, 0].axis('off')
             
@@ -327,12 +322,13 @@ class MedicalWasteFeatureExtractor:
             print(f"  - Solidity: {shape['solidity']:.4f}")
             print(f"  - Hu Moments: {shape['hu_moments'][:3]}...")  # Tampilkan 3 pertama
         
-        # Hapus bagian GLCM
-        # if 'texture' in self.features and 'glcm' in self.features['texture']:
-        #     print("\nFitur Tekstur (GLCM):")
-        #     glcm = self.features['texture']['glcm']
-        #     for key, value in glcm.items():
-        #         print(f"  - {key.capitalize()}: {value:.4f}")
+        # Fitur tekstur LBP
+        if 'texture' in self.features and 'lbp' in self.features['texture']:
+            print("\nFitur Tekstur (LBP):")
+            lbp_hist = self.features['texture']['lbp']['histogram']
+            print(f"  - Jumlah bin histogram: {len(lbp_hist)}")
+            print(f"  - Rata-rata nilai: {np.mean(lbp_hist):.4f}")
+            print(f"  - Standar deviasi: {np.std(lbp_hist):.4f}")
         
         # Fitur HOG
         if 'hog' in self.features:
@@ -359,7 +355,7 @@ def main():
     
     try:
         # Proses gambar
-        features = extractor.process_image(image_path, use_lbp=True, use_glcm=True)
+        features = extractor.process_image(image_path)
         
         # Visualisasi dan simpan hasil
         output_path = extractor.visualize_and_save(image_path)

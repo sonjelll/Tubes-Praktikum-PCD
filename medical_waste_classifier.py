@@ -98,7 +98,7 @@ class MedicalWasteImageClassifier:
             print(f"🔄 Mengekstrak fitur HOG dari: {image_path}")
             
             # Proses gambar untuk mendapatkan fitur HOG dengan visualisasi
-            features = self.extractor.process_image(image_path, use_lbp=False, use_glcm=False)
+            features = self.extractor.process_image(image_path, use_lbp=True)
             
             # Ekstrak nilai per-pixel dari citra HOG
             hog_features = {}

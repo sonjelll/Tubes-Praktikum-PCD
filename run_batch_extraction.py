@@ -105,9 +105,11 @@ class DatasetFeatureProcessor:
             category_output_path = self.output_path / category_name
             category_output_path.mkdir(parents=True, exist_ok=True)
             
+            # Modifikasi pada fungsi process_single_image (baris 100-120)
+            
             # Proses gambar untuk mendapatkan semua fitur
             start_time = time.time()
-            features = self.extractor.process_image(str(image_path), use_lbp=True, use_glcm=True)
+            features = self.extractor.process_image(str(image_path))
             processing_time = time.time() - start_time
             
             # Simpan hasil visualisasi HOG
@@ -168,13 +170,7 @@ class DatasetFeatureProcessor:
                 for i, moment in enumerate(shape['hu_moments']):
                     ml_features[f'hu_moment_{i+1}'] = moment
         
-        # 2. Fitur Tekstur GLCM
-        if 'texture' in features and 'glcm' in features['texture']:
-            glcm = features['texture']['glcm']
-            for key, value in glcm.items():
-                ml_features[f'glcm_{key}'] = value
-        
-        # 3. Fitur Tekstur LBP
+        # 2. Fitur Tekstur LBP
         if 'texture' in features and 'lbp' in features['texture'] and 'histogram' in features['texture']['lbp']:
             lbp_hist = features['texture']['lbp']['histogram']
             # Ambil beberapa bin histogram LBP yang representatif
@@ -182,7 +178,7 @@ class DatasetFeatureProcessor:
             for i in range(num_bins):
                 ml_features[f'lbp_hist_{i+1}'] = lbp_hist[i]
         
-        # 4. Fitur HOG
+        # 3. Fitur HOG
         if 'hog' in features and 'features' in features['hog']:
             hog_features = features['hog']['features']
             
