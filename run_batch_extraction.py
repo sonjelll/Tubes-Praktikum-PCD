@@ -156,21 +156,7 @@ class DatasetFeatureProcessor:
             'category': category
         }
         
-        # 1. Fitur Bentuk
-        if 'shape' in features and features['shape']:
-            shape = features['shape']
-            ml_features['aspect_ratio'] = shape.get('aspect_ratio', 0)
-            ml_features['area'] = shape.get('area', 0)
-            ml_features['perimeter'] = shape.get('perimeter', 0)
-            ml_features['circularity'] = shape.get('circularity', 0)
-            ml_features['solidity'] = shape.get('solidity', 0)
-            
-            # Hu Moments (7 fitur)
-            if 'hu_moments' in shape:
-                for i, moment in enumerate(shape['hu_moments']):
-                    ml_features[f'hu_moment_{i+1}'] = moment
-        
-        # 2. Fitur Tekstur LBP
+        # 1. Fitur Tekstur LBP
         if 'texture' in features and 'lbp' in features['texture'] and 'histogram' in features['texture']['lbp']:
             lbp_hist = features['texture']['lbp']['histogram']
             # Ambil beberapa bin histogram LBP yang representatif
@@ -178,7 +164,7 @@ class DatasetFeatureProcessor:
             for i in range(num_bins):
                 ml_features[f'lbp_hist_{i+1}'] = lbp_hist[i]
         
-        # 3. Fitur HOG
+        # 2. Fitur HOG
         if 'hog' in features and 'features' in features['hog']:
             hog_features = features['hog']['features']
             

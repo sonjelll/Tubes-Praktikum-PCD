@@ -28,8 +28,6 @@ def run_extraction(image_path):
         # Visualisasi dan simpan hasil
         output_path = extractor.visualize_and_save(image_path)
         
-        # Cetak ringkasan fitur
-        extractor.print_feature_summary()
         
         print("\n" + "=" * 50)
         print("✅ Ekstraksi fitur berhasil!")

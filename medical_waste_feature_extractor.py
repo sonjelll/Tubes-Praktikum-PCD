@@ -2,124 +2,103 @@ import cv2
 import numpy as np
 from skimage import feature, filters, measure
 from skimage.feature import hog, local_binary_pattern
-from scipy import ndimage
 import matplotlib.pyplot as plt
-import warnings
 import os
 
 class MedicalWasteFeatureExtractor:
     def __init__(self):
         self.features = {}
         
+    def histogram_equalization(self, image):
+        hist, bins = np.histogram(image.flatten(), bins=256, range=(0, 256))
+        
+        cdf = np.cumsum(hist)
+        
+        cdf_min = cdf[cdf > 0].min()
+        cdf_max = cdf.max()
+        
+        cdf_normalized = np.zeros(256, dtype=np.uint8)
+        for i in range(256):
+            if cdf[i] > 0:
+                cdf_normalized[i] = np.round((cdf[i] - cdf_min) * 255.0 / (cdf_max - cdf_min))
+            else:
+                cdf_normalized[i] = 0
+        equalized_image = cdf_normalized[image]
+        
+        return equalized_image.astype(np.uint8)
+    
+    def gaussian_blur(self, image, kernel_size=5, sigma=1.0):
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        
+        kernel = self.create_gaussian_kernel(kernel_size, sigma)
+        
+        blurred = self.convolve2d(image, kernel)
+        
+        if image.dtype == np.float64 or image.dtype == np.float32:
+            return blurred.astype(image.dtype)
+        else:
+            return blurred.astype(np.uint8)
+    
+    def create_gaussian_kernel(self, size, sigma):
+        kernel = np.zeros((size, size))
+        center = size // 2
+        
+        for i in range(size):
+            for j in range(size):
+                x = i - center
+                y = j - center
+                kernel[i, j] = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+        
+        kernel = kernel / np.sum(kernel)
+        return kernel
+    
+    def convolve2d(self, image, kernel):
+        image_h, image_w = image.shape
+        kernel_h, kernel_w = kernel.shape
+        
+        pad_h = kernel_h // 2
+        pad_w = kernel_w // 2
+        
+        padded_image = np.pad(image, ((pad_h, pad_h), (pad_w, pad_w)), mode='reflect')
+
+        output = np.zeros_like(image, dtype=np.float64)
+        
+        for i in range(image_h):
+            for j in range(image_w):
+                region = padded_image[i:i+kernel_h, j:j+kernel_w]
+              
+                output[i, j] = np.sum(region * kernel)
+        
+        return output
+    
     def color_preprocessing(self, image):
-        """
-        Ekstraksi fitur warna: konversi ke grayscale, peningkatan kontras, dan reduksi noise
-        """
-        # Konversi ke grayscale
         if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # Manual RGB to grayscale conversion: 0.299*R + 0.587*G + 0.114*B
+            gray = np.dot(image[...,:3], [0.114, 0.587, 0.299])  # BGR to grayscale
+            gray = gray.astype(np.uint8)
         else:
             gray = image.copy()
             
-        # Peningkatan kontras menggunakan CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrast_enhanced = clahe.apply(gray)
+        print("   - Mengkonversi ke grayscale secara manual...")
         
-        # Reduksi noise menggunakan Gaussian blur
-        denoised = cv2.GaussianBlur(contrast_enhanced, (5, 5), 0)
+        # Peningkatan kontras menggunakan manual histogram equalization
+        print("   - Menerapkan histogram equalization manual...")
+        contrast_enhanced = self.histogram_equalization(gray)
         
-        # Reduksi noise tambahan menggunakan bilateral filter
-        denoised = cv2.bilateralFilter(denoised, 9, 75, 75)
+        # Reduksi noise menggunakan manual Gaussian blur
+        print("   - Menerapkan Gaussian blur manual...")
+        denoised = self.gaussian_blur(contrast_enhanced, kernel_size=5, sigma=1.0)
         
         self.features['color_processed'] = denoised
         return denoised
     
-    def shape_features(self, image):
-        """
-        Ekstraksi fitur bentuk: Hu moments, aspect ratio, dan analisis kontur
-        """
-        # Threshold untuk mendapatkan binary image
-        _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Morfologi untuk membersihkan noise
-        kernel = np.ones((3,3), np.uint8)  # Kembali ke kernel 3x3 seperti semula
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        
-        # Cari kontur
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)  # Kembali ke CHAIN_APPROX_SIMPLE
-        
-        shape_features = []
-        mask = np.zeros(image.shape[:2], dtype=np.uint8)
-        
-        if contours:
-            # Ambil kontur terbesar
-            largest_contour = max(contours, key=cv2.contourArea)
-            
-            # Buat mask dari kontur terbesar
-            cv2.fillPoly(mask, [largest_contour], 255)
-            
-            # Hu Moments
-            moments = cv2.moments(largest_contour)
-            hu_moments = cv2.HuMoments(moments).flatten()
-            
-            # Aspect Ratio
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            aspect_ratio = float(w) / h
-            
-            # Area dan Perimeter
-            area = cv2.contourArea(largest_contour)
-            perimeter = cv2.arcLength(largest_contour, True)
-            
-            # Circularity
-            if perimeter > 0:
-                circularity = 4 * np.pi * area / (perimeter * perimeter)
-            else:
-                circularity = 0
-                
-            # Solidity
-            hull = cv2.convexHull(largest_contour)
-            hull_area = cv2.contourArea(hull)
-            if hull_area > 0:
-                solidity = area / hull_area
-            else:
-                solidity = 0
-            
-            shape_features = {
-                'hu_moments': hu_moments,
-                'aspect_ratio': aspect_ratio,
-                'area': area,
-                'perimeter': perimeter,
-                'circularity': circularity,
-                'solidity': solidity,
-                'contour': largest_contour,
-                'mask': mask  # Tambahkan mask untuk background removal
-            }
-        
-        self.features['shape'] = shape_features
-        return shape_features
-    
     def texture_features_lbp(self, image, radius=3, n_points=24, method='uniform'):
-        """
-        Ekstraksi fitur tekstur menggunakan Local Binary Pattern (LBP)
-        
-        Args:
-            image (numpy.ndarray): Citra grayscale
-            radius (int): Radius untuk LBP
-            n_points (int): Jumlah titik di sekitar pusat
-            method (str): Metode LBP ('uniform', 'default', 'ror', 'var')
-            
-        Returns:
-            dict: Dictionary berisi fitur LBP dan visualisasi
-        """
-        # Pastikan gambar dalam format grayscale
         if len(image.shape) > 2:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Hitung LBP
         lbp = local_binary_pattern(image, n_points, radius, method)
         
-        # Hitung histogram LBP
         n_bins = int(lbp.max() + 1)
         hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins), density=True)
         
@@ -138,28 +117,20 @@ class MedicalWasteFeatureExtractor:
     
     def hog_features(self, image, orientations=9, pixels_per_cell=(8, 8), 
                      cells_per_block=(2, 2), visualize=True):
-        """
-        Ekstraksi fitur HOG (Histogram of Oriented Gradients)
-        """
         if visualize:
             hog_features, hog_image = hog(image, orientations=orientations,
                                         pixels_per_cell=pixels_per_cell,
                                         cells_per_block=cells_per_block,
                                         visualize=True, transform_sqrt=True)
             
-            # Meningkatkan visibilitas garis HOG
-            # Normalisasi gambar HOG ke rentang 0-1
+
             hog_image_normalized = hog_image / np.max(hog_image)
             
-            # Meningkatkan kontras dengan power-law transformation (gamma correction)
-            gamma = 0.5  # Nilai gamma < 1 akan meningkatkan kontras area gelap
+            gamma = 0.5  
             hog_image_enhanced = np.power(hog_image_normalized, gamma)
-            
-            # Meningkatkan ketajaman garis dengan unsharp masking
-            blurred = ndimage.gaussian_filter(hog_image_enhanced, sigma=1.0)
+            blurred = self.gaussian_blur(hog_image_enhanced, kernel_size=5, sigma=1.0)
             hog_image_sharpened = hog_image_enhanced + 1.5 * (hog_image_enhanced - blurred)
             
-            # Clip nilai untuk memastikan tetap dalam rentang 0-1
             hog_image_sharpened = np.clip(hog_image_sharpened, 0, 1)
             
             return hog_features, hog_image_sharpened
@@ -198,22 +169,17 @@ class MedicalWasteFeatureExtractor:
         # Gunakan hasil preprocessing untuk ekstraksi fitur selanjutnya
         processed_image_for_features = processed_image.copy()
         
-        # 2. Ekstraksi fitur bentuk
-        print("2. Mengekstrak fitur bentuk...")
-        shape_features = self.shape_features(processed_image_for_features)
-        self.features['shape'] = shape_features
-        
-        # 3. Ekstraksi fitur tekstur LBP
+        # 2. Ekstraksi fitur tekstur LBP
         if use_lbp:
-            print("3. Mengekstrak fitur tekstur LBP...")
+            print("2. Mengekstrak fitur tekstur LBP...")
             texture_features = {}
             lbp_features = self.texture_features_lbp(processed_image_for_features)
             texture_features['lbp'] = lbp_features
             self.features['texture'] = texture_features
         
-        # 4. Ekstraksi fitur HOG
+        # 3. Ekstraksi fitur HOG
         if use_hog:
-            print("4. Mengekstrak fitur HOG...")
+            print("3. Mengekstrak fitur HOG...")
             hog_features, hog_image = self.hog_features(processed_image_for_features)
             self.features['hog'] = {
                 'features': hog_features,
@@ -223,14 +189,6 @@ class MedicalWasteFeatureExtractor:
         return self.features
     
     def visualize_and_save(self, original_image_path, output_folder=".", create_full_visualization=True):
-        """
-        Visualisasi dan simpan hasil ekstraksi fitur
-        
-        Args:
-            original_image_path (str): Path ke gambar asli
-            output_folder (str): Folder untuk menyimpan hasil visualisasi
-            create_full_visualization (bool): Jika True, buat file features_extracted.png
-        """
         # Baca gambar asli
         original = cv2.imread(original_image_path)
         original_rgb = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
@@ -257,8 +215,8 @@ class MedicalWasteFeatureExtractor:
         
         # Hanya buat visualisasi lengkap jika diminta
         if create_full_visualization:
-            # Buat subplot dengan ukuran yang sesuai - ubah menjadi 2x3 untuk menampilkan semua fitur
-            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+            # Buat subplot dengan ukuran yang sesuai - ubah menjadi 2x2 untuk menampilkan semua fitur
+            fig, axes = plt.subplots(2, 2, figsize=(16, 10))
                 
             fig.suptitle('Ekstraksi Fitur Sampah Medis', fontsize=16)
             
@@ -272,12 +230,6 @@ class MedicalWasteFeatureExtractor:
             axes[0, 1].set_title('Preprocessing Warna')
             axes[0, 1].axis('off')
             
-            # Fitur bentuk (mask)
-            if 'shape' in self.features and 'mask' in self.features['shape']:
-                axes[0, 2].imshow(self.features['shape']['mask'], cmap='gray')
-                axes[0, 2].set_title('Fitur Bentuk (Mask)')
-                axes[0, 2].axis('off')
-            
             # Fitur tekstur LBP
             if 'texture' in self.features and 'lbp' in self.features['texture'] and 'image' in self.features['texture']['lbp']:
                 axes[1, 0].imshow(self.features['texture']['lbp']['image'])
@@ -290,9 +242,6 @@ class MedicalWasteFeatureExtractor:
                 axes[1, 1].set_title('HOG Features')
                 axes[1, 1].axis('off')
             
-            # Kosongkan subplot yang tidak digunakan
-            axes[1, 2].axis('off')
-            
             plt.tight_layout()
             
             # Simpan hasil visualisasi
@@ -304,38 +253,7 @@ class MedicalWasteFeatureExtractor:
             print(f"Hasil visualisasi disimpan di: {output_path}")
             
         return hog_output_path if hog_output_path else None
-    
-    def print_feature_summary(self):
-        """
-        Cetak ringkasan fitur yang diekstrak
-        """
-        print("\n=== RINGKASAN FITUR YANG DIEKSTRAK ===")
-        
-        # Fitur bentuk
-        if 'shape' in self.features and self.features['shape']:
-            print("\nFitur Bentuk:")
-            shape = self.features['shape']
-            print(f"  - Aspect Ratio: {shape['aspect_ratio']:.4f}")
-            print(f"  - Area: {shape['area']:.2f}")
-            print(f"  - Perimeter: {shape['perimeter']:.2f}")
-            print(f"  - Circularity: {shape['circularity']:.4f}")
-            print(f"  - Solidity: {shape['solidity']:.4f}")
-            print(f"  - Hu Moments: {shape['hu_moments'][:3]}...")  # Tampilkan 3 pertama
-        
-        # Fitur tekstur LBP
-        if 'texture' in self.features and 'lbp' in self.features['texture']:
-            print("\nFitur Tekstur (LBP):")
-            lbp_hist = self.features['texture']['lbp']['histogram']
-            print(f"  - Jumlah bin histogram: {len(lbp_hist)}")
-            print(f"  - Rata-rata nilai: {np.mean(lbp_hist):.4f}")
-            print(f"  - Standar deviasi: {np.std(lbp_hist):.4f}")
-        
-        # Fitur HOG
-        if 'hog' in self.features:
-            print(f"\nFitur HOG:")
-            print(f"  - Jumlah fitur: {len(self.features['hog']['features'])}")
-            print(f"  - Rata-rata nilai: {np.mean(self.features['hog']['features']):.4f}")
-            print(f"  - Standar deviasi: {np.std(self.features['hog']['features']):.4f}")
+
 
 
 def main():
@@ -360,8 +278,6 @@ def main():
         # Visualisasi dan simpan hasil
         output_path = extractor.visualize_and_save(image_path)
         
-        # Cetak ringkasan fitur
-        extractor.print_feature_summary()
         
         print(f"\nProses selesai! Hasil disimpan di folder saat ini.")
         

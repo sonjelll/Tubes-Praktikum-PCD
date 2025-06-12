@@ -75,8 +75,8 @@ class MedicalWasteImageClassifier:
             import traceback
             traceback.print_exc()
             return False
-    
-    def classify_image(self, image_path, model_type='randomforest', show_hog=True):
+        
+    def classify_image(self, image_path, model_type='knn', show_hog=True):
         """
         Klasifikasi gambar menggunakan model yang dipilih
         
@@ -94,14 +94,36 @@ class MedicalWasteImageClassifier:
                 print(f"❌ Model {model_type} tidak tersedia. Pilihan: {list(self.models.keys())}")
                 return None
             
-            # Ekstrak fitur HOG
-            print(f"🔄 Mengekstrak fitur HOG dari: {image_path}")
+            # Ekstrak fitur dengan alur preprocessing->lbp->hog menggunakan preprocessing manual
+            print(f"🔄 Memproses gambar: {image_path}")
             
-            # Proses gambar untuk mendapatkan fitur HOG dengan visualisasi
-            features = self.extractor.process_image(image_path, use_lbp=True)
+            # Baca gambar
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Gambar tidak ditemukan: {image_path}")
             
-            # Ekstrak nilai per-pixel dari citra HOG
-            hog_features = {}
+            print("1. Melakukan preprocessing warna manual...")
+            # Preprocessing manual seperti di medical_waste_feature_extractor
+            processed_image = self.color_preprocessing(image)
+            
+            print("2. Mengekstrak fitur tekstur LBP...")
+            print("3. Mengekstrak fitur HOG...")
+            
+            # Gunakan ekstraksi fitur dari extractor dengan gambar yang sudah dipreprocess manual
+            # Bypass preprocessing di extractor dan langsung ekstrak LBP dan HOG
+            lbp_features = self.extractor.texture_features_lbp(processed_image)
+            hog_features, hog_image = self.extractor.hog_features(processed_image)
+            
+            # Gabungkan fitur seperti di extractor
+            features = {
+                'color_processed': processed_image,
+                'texture': {'lbp': lbp_features},
+                'hog': {'features': hog_features, 'image': hog_image}
+            }
+            
+            # Gabungkan fitur untuk klasifikasi - HANYA GUNAKAN HOG
+            combined_features = {}
+            
             if 'hog' in features and 'image' in features['hog']:
                 hog_image = features['hog']['image']
                 # Flatten HOG image untuk mendapatkan nilai per-pixel
@@ -110,29 +132,36 @@ class MedicalWasteImageClassifier:
                 pixel_sample_size = min(100, len(hog_pixels))
                 pixel_indices = np.linspace(0, len(hog_pixels)-1, pixel_sample_size, dtype=int)
                 for i, idx in enumerate(pixel_indices):
-                    hog_features[f'hog_pixel_{i+1}'] = hog_pixels[idx]
+                    combined_features[f'hog_pixel_{i+1}'] = hog_pixels[idx]
             
-            if not hog_features:
+            if not combined_features:
                 print("❌ Gagal mengekstrak fitur HOG!")
                 return None
             
-            # Tampilkan visualisasi HOG jika diminta
-            if show_hog and 'hog' in features:
+            # Tampilkan visualisasi jika diminta
+            if show_hog:
                 # Baca gambar asli untuk ditampilkan
                 original_img = cv2.imread(image_path)
                 original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
                 
-                # Siapkan visualisasi
-                plt.figure(figsize=(12, 6))
+                # Siapkan visualisasi dengan 3 panel: gambar asli, LBP, dan HOG
+                plt.figure(figsize=(18, 6))
                 
                 # Gambar asli
-                plt.subplot(1, 2, 1)
+                plt.subplot(1, 3, 1)
                 plt.imshow(original_img)
                 plt.title("Gambar Asli")
                 plt.axis('off')
                 
+                # Visualisasi LBP jika tersedia
+                if 'texture' in features and 'lbp' in features['texture'] and 'image' in features['texture']['lbp']:
+                    plt.subplot(1, 3, 2)
+                    plt.imshow(features['texture']['lbp']['image'])
+                    plt.title("Fitur LBP")
+                    plt.axis('off')
+                
                 # Visualisasi HOG
-                plt.subplot(1, 2, 2)
+                plt.subplot(1, 3, 3)
                 plt.imshow(features['hog']['image'], cmap='gray')
                 plt.title("Visualisasi HOG")
                 plt.axis('off')
@@ -141,7 +170,7 @@ class MedicalWasteImageClassifier:
                 plt.show()
             
             # Konversi fitur ke format yang sesuai untuk model
-            features_df = pd.DataFrame([hog_features])
+            features_df = pd.DataFrame([combined_features])
             
             # Normalisasi fitur
             features_scaled = self.scaler.transform(features_df)
@@ -183,7 +212,134 @@ class MedicalWasteImageClassifier:
             import traceback
             traceback.print_exc()
             return None
-
+    
+    def histogram_equalization(self, image):
+        """
+        Manual implementation of Histogram Equalization
+        
+        Args:
+            image: Input grayscale image
+            
+        Returns:
+            Histogram equalized image
+        """
+        # Hitung histogram dari gambar
+        hist, bins = np.histogram(image.flatten(), bins=256, range=(0, 256))
+        
+        # Hitung CDF (Cumulative Distribution Function)
+        cdf = np.cumsum(hist)
+        
+        # Normalisasi CDF ke rentang 0-255
+        # Rumus: new_value = (cdf[old_value] - cdf_min) * 255 / (cdf_max - cdf_min)
+        cdf_min = cdf[cdf > 0].min()  # Ambil nilai minimum yang tidak nol
+        cdf_max = cdf.max()
+        
+        # Buat lookup table untuk transformasi
+        cdf_normalized = np.zeros(256, dtype=np.uint8)
+        for i in range(256):
+            if cdf[i] > 0:
+                cdf_normalized[i] = np.round((cdf[i] - cdf_min) * 255.0 / (cdf_max - cdf_min))
+            else:
+                cdf_normalized[i] = 0        # Terapkan transformasi pada gambar
+        equalized_image = cdf_normalized[image]
+        
+        return equalized_image.astype(np.uint8)
+    
+    def gaussian_blur(self, image, kernel_size=5, sigma=1.0):
+        """
+        Manual implementation of Gaussian Blur
+        
+        Args:
+            image: Input image
+            kernel_size: Size of Gaussian kernel (must be odd)
+            sigma: Standard deviation for Gaussian kernel
+        """
+        # Ensure kernel size is odd
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        
+        # Create Gaussian kernel
+        kernel = self.create_gaussian_kernel(kernel_size, sigma)
+        
+        # Apply convolution
+        blurred = self.convolve2d(image, kernel)
+        
+        # Handle different data types appropriately
+        if image.dtype == np.float64 or image.dtype == np.float32:
+            return blurred.astype(image.dtype)
+        else:
+            return blurred.astype(np.uint8)
+    
+    def create_gaussian_kernel(self, size, sigma):
+        """
+        Create Gaussian kernel manually
+        """
+        kernel = np.zeros((size, size))
+        center = size // 2
+        
+        # Calculate Gaussian values
+        for i in range(size):
+            for j in range(size):
+                x = i - center
+                y = j - center
+                kernel[i, j] = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+        
+        # Normalize kernel
+        kernel = kernel / np.sum(kernel)
+        return kernel
+    
+    def convolve2d(self, image, kernel):
+        """
+        Manual 2D convolution
+        """
+        # Get dimensions
+        image_h, image_w = image.shape
+        kernel_h, kernel_w = kernel.shape
+        
+        # Calculate padding
+        pad_h = kernel_h // 2
+        pad_w = kernel_w // 2
+        
+        # Pad image
+        padded_image = np.pad(image, ((pad_h, pad_h), (pad_w, pad_w)), mode='reflect')
+        
+        # Initialize output
+        output = np.zeros_like(image, dtype=np.float64)
+        
+        # Perform convolution
+        for i in range(image_h):
+            for j in range(image_w):
+                # Extract region
+                region = padded_image[i:i+kernel_h, j:j+kernel_w]
+                  # Apply kernel
+                output[i, j] = np.sum(region * kernel)
+        
+        return output
+    
+    def color_preprocessing(self, image):
+        """
+        Manual color preprocessing: grayscale conversion, histogram equalization, dan gaussian blur
+        Menggunakan implementasi manual tanpa CLAHE dan bilateral filter
+        """
+        # Konversi ke grayscale
+        if len(image.shape) == 3:
+            # Manual RGB to grayscale conversion: 0.299*R + 0.587*G + 0.114*B
+            gray = np.dot(image[...,:3], [0.114, 0.587, 0.299])  # BGR to grayscale
+            gray = gray.astype(np.uint8)
+        else:
+            gray = image.copy()
+            print("   - Mengkonversi ke grayscale secara manual...")
+        
+        # Peningkatan kontras menggunakan manual histogram equalization
+        print("   - Menerapkan histogram equalization manual...")
+        contrast_enhanced = self.histogram_equalization(gray)
+        
+        # Reduksi noise menggunakan manual Gaussian blur
+        print("   - Menerapkan Gaussian blur manual...")
+        denoised = self.gaussian_blur(contrast_enhanced, kernel_size=5, sigma=1.0)
+        
+        return denoised
+    
 def select_image():
     """
     Buka dialog untuk memilih gambar
