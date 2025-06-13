@@ -106,26 +106,27 @@ class DatasetFeatureProcessor:
             category_output_path.mkdir(parents=True, exist_ok=True)
             
             # Modifikasi pada fungsi process_single_image (baris 100-120)
-            
-            # Proses gambar untuk mendapatkan semua fitur
+              # Proses gambar untuk mendapatkan semua fitur dengan fokus pada main output
             start_time = time.time()
-            features = self.extractor.process_image(str(image_path))
+            features = self.extractor.process_image(str(image_path), 
+                                                  use_lbp=True, 
+                                                  use_hog=False,  # Fokus pada edge detection
+                                                  use_edge_detection=True, 
+                                                  remove_background=True)
             processing_time = time.time() - start_time
-            
-            # Simpan hasil visualisasi HOG
-            output_filename = f"{image_path.stem}_hog.png"
+            # Simpan hasil visualisasi main output (Canny edge detection)
+            output_filename = f"{image_path.stem}_main_output.png"
             output_path = category_output_path / output_filename
             
-            # Gunakan method visualize_and_save dengan path output custom dan tanpa membuat features_extracted.png
-            hog_output_path = self.extractor.visualize_and_save(str(image_path), output_folder=str(category_output_path), create_full_visualization=False)
+            # Gunakan method visualize_and_save dengan fokus pada main output
+            main_output_path = self.extractor.visualize_and_save(str(image_path), output_folder=str(category_output_path), create_full_visualization=False)
             
             # Ekstrak fitur untuk machine learning
             extracted_features = self.extract_features_for_ml(features, category_name, str(image_path))
-            
             return {
                 'status': 'success',
                 'input_path': str(image_path),
-                'output_path': hog_output_path if hog_output_path else str(output_path),
+                'output_path': main_output_path if main_output_path else str(output_path),
                 'category': category_name,
                 'features': extracted_features,
                 'processing_time': processing_time
@@ -156,7 +157,21 @@ class DatasetFeatureProcessor:
             'category': category
         }
         
-        # 1. Fitur Tekstur LBP
+        # 1. Ekstrak nilai pixel dari main output (Canny edge detection)
+        main_output_pixels = self.extractor.extract_main_output_pixels()
+        if main_output_pixels:
+            # Tambahkan statistik pixel
+            ml_features.update({k: v for k, v in main_output_pixels.items() 
+                              if not k.startswith('pixel_') and not k.startswith('norm_pixel_')})
+            
+            # Simpan semua nilai pixel untuk analisis mendalam (akan disimpan di CSV terpisah)
+            ml_features['main_output_pixels'] = main_output_pixels
+        
+        # 2. Fitur Edge Detection dari Canny
+        if 'canny_edge_detection' in features and 'edge_features' in features['canny_edge_detection']:
+            edge_features = features['canny_edge_detection']['edge_features']
+            for key, value in edge_features.items():
+                ml_features[f'edge_{key}'] = value        # 3. Fitur Tekstur LBP
         if 'texture' in features and 'lbp' in features['texture'] and 'histogram' in features['texture']['lbp']:
             lbp_hist = features['texture']['lbp']['histogram']
             # Ambil beberapa bin histogram LBP yang representatif
@@ -164,7 +179,7 @@ class DatasetFeatureProcessor:
             for i in range(num_bins):
                 ml_features[f'lbp_hist_{i+1}'] = lbp_hist[i]
         
-        # 2. Fitur HOG
+        # 4. Fitur HOG (jika ada)
         if 'hog' in features and 'features' in features['hog']:
             hog_features = features['hog']['features']
             
@@ -279,6 +294,54 @@ class DatasetFeatureProcessor:
         except Exception as e:
             print(f"⚠️ Warning: Gagal menyimpan CSV nilai per-pixel HOG: {e}")
     
+    def save_main_output_pixels_to_csv(self, results):
+        """
+        Simpan nilai per-pixel dari main output (Canny edge detection) ke file CSV terpisah
+        
+        Args:
+            results (list): Hasil pemrosesan semua gambar
+        """
+        try:
+            main_output_pixel_data = []
+            
+            for result in results:
+                if result['status'] == 'success' and 'features' in result:
+                    features = result['features']
+                    category = features['category']
+                    image_path = features['image_path']
+                    
+                    # Ekstrak nilai pixel dari main output
+                    if 'main_output_pixels' in features and features['main_output_pixels']:
+                        pixel_data = features['main_output_pixels']
+                        
+                        # Buat record untuk setiap gambar
+                        pixel_record = {
+                            'image_path': image_path,
+                            'category': category
+                        }
+                        
+                        # Tambahkan semua nilai pixel
+                        pixel_record.update(pixel_data)
+                        main_output_pixel_data.append(pixel_record)
+            
+            if main_output_pixel_data:
+                # Buat DataFrame dari data
+                df = pd.DataFrame(main_output_pixel_data)
+                
+                # Simpan ke CSV
+                csv_path = self.output_path / 'main_output_pixels_for_ml.csv'
+                df.to_csv(csv_path, index=False)
+                print(f"💾 Nilai per-pixel Main Output disimpan ke: {csv_path}")
+                print(f"📊 Ukuran data: {len(df)} sampel x {len(df.columns)} fitur pixel")
+                
+            else:
+                print("⚠️ Tidak ada data pixel main output yang dapat disimpan")
+                
+        except Exception as e:
+            print(f"⚠️ Warning: Gagal menyimpan CSV nilai per-pixel Main Output: {e}")
+            import traceback
+            traceback.print_exc()
+
     def process_dataset(self):
         """Proses seluruh dataset"""
         print("🚀 Memulai pemrosesan dataset...")
@@ -322,17 +385,21 @@ class DatasetFeatureProcessor:
             else:
                 self.stats['failed'] += 1
                 print(f"   ❌ Gagal: {result['error']}")
-        
-        # Simpan fitur ke CSV
+          # Simpan fitur ke CSV
         self.save_features_to_csv(results)
         
-        # Simpan nilai per-pixel HOG ke CSV terpisah
+        # Simpan nilai per-pixel dari main output ke CSV terpisah
+        self.save_main_output_pixels_to_csv(results)
+        
+        # Simpan nilai per-pixel HOG ke CSV terpisah (jika ada)
         self.save_hog_pixels_to_csv(results)
+        
+        # Simpan nilai per-pixel main output ke CSV terpisah
+        self.save_main_output_pixels_to_csv(results)
         
         # Hitung total waktu pemrosesan
         self.stats['processing_time'] = time.time() - start_time
-        
-        # Tampilkan ringkasan
+          # Tampilkan ringkasan
         self.print_summary()
         
         return True
@@ -361,7 +428,9 @@ class DatasetFeatureProcessor:
             
         print(f"\n📊 File CSV untuk machine learning:")
         print(f"   └─ {self.output_path}/dataset_features_for_ml.csv")
+        print(f"   └─ {self.output_path}/main_output_pixels_for_ml.csv (NEW!)")
         print(f"   └─ {self.output_path}/hog_pixels_for_ml.csv")
+        print(f"   └─ {self.output_path}/dataset_metadata.csv")
 
 def main():
     """Fungsi utama"""
